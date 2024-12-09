@@ -1,0 +1,2396 @@
+ 'Part1
+ 
+
+Public Function GetPlantCodeObject() As Object
+    'code here
+    Dim plantCodeObject As Object
+    
+    Dim originPlantCode As String
+    Dim destinationPlantCode As String
+        
+    Dim originName As String
+    Dim destinationName As String
+    Dim i As Variant
+    
+
+    Dim ws As Worksheet
+    
+    Set plantCodeObject = CreateObject("Scripting.Dictionary")
+    Set ws = ThisWorkbook.Sheets("PlantCode_Setting")
+    
+    originName = "origin"
+    destinationName = "destination"
+    
+    destinationPlantCode = ws.Range("b2").Value
+    originPlantCode = ws.Range("b3").Value
+    
+    
+    plantCodeObject.Add originName, originPlantCode
+    plantCodeObject.Add destinationName, destinationPlantCode
+    
+    For Each i In plantCodeObject.keys
+        Debug.Print "plantCodeObject(i) : " & plantCodeObject(i)
+        
+    Next i
+    
+    Set GetPlantCodeObject = plantCodeObject
+    
+    
+
+End Function
+
+
+
+
+
+ 
+Public Function GetNetTotalDemandOfDestination(inputAvailableStock As Object) As Object
+    Dim netTotalDemand As Object
+    Dim plantCodeObject As Object
+    
+    
+    Dim orderDemandOfDestination As Object
+    Dim orderDemandOfOrigin As Object
+    
+    Dim destinationPlantCode As String
+    Dim allDestinationAvailableStock As Object
+    
+    Dim finalDestinationAvailableStock As Object
+    'Dim availableStockOfDestination As Object
+    
+    Dim netDemandOfDestinationResult As Object
+    'Set plantCodeObject = CreateObject("Scripting.Dictionary")
+    Set plantCodeObject = GetPlantCodeObject()
+    
+    
+    destinationPlantCode = plantCodeObject("destination")
+    Set orderDemandOfDestination = GetOrdersDemandByPlantCode(destinationPlantCode)
+    Debug.Print "orderDemandOfDestination.Count : " & orderDemandOfDestination.Count
+    'Deducted Order By it stock
+    
+    
+    '**************** To fix all product must validate if its channel met criteria*******************
+    Set finalDestinationAvailableStock = ValidateProductLifeForStock(inputAvailableStock, False)
+    
+
+    
+    Debug.Print "Before calling netDemandOfDestinationResult"
+    Set netDemandOfDestinationResult = CalculateNetDemandOfDestination(orderDemandOfDestination, finalDestinationAvailableStock)
+    Set GetNetTotalDemandOfDestination = netDemandOfDestinationResult
+      
+End Function
+ 
+Public Function GetOrdersDemandByPlantCode(inputPlantCode As String) As Object
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim balanceDemand As Object
+    Dim materialKey As String
+    Dim balanceValue As Variant
+    Dim eachPlantCode As String
+    Dim existingBalanceValue As Variant
+    
+    Set ws = ThisWorkbook.Sheets("5DayRemaining_Order")
+    Set balanceDemand = CreateObject("Scripting.Dictionary") ' Use dictionary
+    Debug.Print "GetBalanceDemand Enter"
+    
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    Debug.Print "Enter GetOrdersDemandByPlantCode"
+    
+    ' Loop through Balance sheet rows
+    For i = 2 To lastRow ' Assuming row 1 is the header
+        balanceValue = ws.Cells(i, 4).Value
+        materialKey = CStr(ws.Cells(i, 2).Value) ' Convert Material (key) to String
+        
+        eachPlantCode = CStr(ws.Cells(i, 1).Value) 'get plant code of each item
+        
+        Debug.Print "eachPlantCode : " & eachPlantCode
+        Debug.Print "inputPlantCode : " & inputPlantCode
+        Debug.Print "In loop of Balance" & balanceValue
+        ' Only process rows where balance is numeric and negative
+        If IsNumeric(balanceValue) And balanceValue > 0 And eachPlantCode = inputPlantCode Then
+            If balanceDemand.Exists(materialKey) Then
+                'Get the existing data and update its demand
+                existingBalanceValue = balanceDemand(materialKey)
+                balanceValue = existingBalanceValue + balanceValue
+                
+                'remove before add the new one
+                balanceDemand.Remove materialKey
+                
+                'add new one after remove
+                balanceDemand.Add materialKey, CLng(balanceValue) ' Add balance as value, Material as Key
+                Debug.Print "after add value of balance to object"
+            Else
+                balanceDemand.Add materialKey, CLng(balanceValue) ' Add balance as value, Material as Key
+                Debug.Print "after add value of balance to object"
+            End If
+        End If
+    Next i
+    
+    Set GetOrdersDemandByPlantCode = balanceDemand ' Return the dictionary
+    Debug.Print "GetOrdersDemandByPlantCode.Count : " & GetOrdersDemandByPlantCode.Count
+    Debug.Print "END GetBalanceDemand"
+End Function
+
+Public Function CalculateNetDemandOfDestination(inputOrderOfDestinationPlant As Object, inputAvailableStock As Object) As Object
+    Dim materialKey As Variant
+    Dim materialDemand As Double
+    
+    Dim materialStock As Long
+    
+    Dim absoluteNetDemandObject As Object
+    
+    Dim stdDeviation As Double
+    Dim materialChannelDictObject As Object
+    Dim materialChannel As String
+
+    Dim consolidatedStock As Object
+    
+    Debug.Print "Enter CalculateNetDemandOfDestination"
+    
+    
+    Set absoluteNetDemandObject = CreateObject("Scripting.Dictionary")
+    Set materialChannelDictObject = GetAllMaterialChannels()
+    Debug.Print "materialChannelDictObject.Count : " & materialChannelDictObject.Count
+    
+    
+    Set consolidatedStock = consolidateStockQuantityObject(inputAvailableStock)
+    Debug.Print "consolidatedStock.Count : " & consolidatedStock.Count
+    
+    
+    
+
+    For Each materialKey In inputOrderOfDestinationPlant.keys
+        Debug.Print "Enter loop of inputOrderOfDestinationPlant.Keys"
+        materialDemand = inputOrderOfDestinationPlant(materialKey)
+        Debug.Print "materialKey in inputOrderOfDestinationPlant : " & materialKey
+
+        materialChannel = materialChannelDictObject(materialKey)
+        Debug.Print "materialChannel : " & materialChannel
+
+
+        If materialChannel = "7Eleven" Then
+            stdDeviation = GetStandardDeviation()
+            'multiply std deviation
+            Debug.Print " This is for std deviation"
+            materialDemand = materialDemand * stdDeviation
+            
+            
+        End If
+
+
+        Debug.Print "materialDemand : " & materialDemand
+
+
+        '***************** Start calculate it by consolidatedstock ***********************
+        'Get consolidatedStock
+        If consolidatedStock.Exists(materialKey) Then
+            'Do something
+            Debug.Print "Material : " & materialKey & " Exists in consolidatedStock"
+            materialStock = consolidatedStock(materialKey)
+            Debug.Print "materialStock : " & materialStock
+
+            materialDemand = materialDemand - materialStock
+            
+            Debug.Print "Net materialDemand before round up : " & materialDemand
+            
+            If materialDemand > 0 Then
+                'Custom Round up demand
+                materialDemand = CustomRoundUp(materialDemand) '********* Fix round up for negative value to not round at all *********
+                Debug.Print "Net materialDemand after round up : " & materialDemand
+                absoluteNetDemandObject.Add materialKey, materialDemand
+            End If
+            
+
+        Else
+            ' Do Others
+            Debug.Print "Material : " & materialKey & " does not exists in consolidatedStock"
+            
+            If materialDemand > 0 Then
+                'Custom Round up demand
+                Debug.Print "Net materialDemand before round up : " & materialDemand
+                materialDemand = CustomRoundUp(materialDemand) '********* Fix round up for negative value to not round at all *********
+                Debug.Print "Net materialDemand after round up : " & materialDemand
+                absoluteNetDemandObject.Add materialKey, materialDemand
+            End If
+
+        End If
+    Next materialKey
+
+        '***************** End calculate it by consolidated ******************************
+
+        
+    
+    Set CalculateNetDemandOfDestination = absoluteNetDemandObject
+    Debug.Print "End CalculateNetDemandOfDestination"
+
+End Function
+
+
+Public Function consolidateStockQuantityObject(inputAvailableStock As Object) As Object
+    Dim consolidatedStock As Object
+    Dim stockKey As Variant
+    Dim stockItem As clsStockData
+    Dim materialKey As String
+    Dim stockQty As Long
+    Dim existingStockQty As Long
+    
+    Debug.Print "enter consolidateStockQuantityObject "
+    Set consolidatedStock = CreateObject("Scripting.Dictionary")
+    
+    For Each stockKey In inputAvailableStock.keys
+        'do something
+        Set stockItem = inputAvailableStock(stockKey)
+        materialKey = stockItem.material
+        stockQty = stockItem.stockPack
+        
+        Debug.Print "stockQty before add of " & materialKey & "is : " & stockQty
+        
+
+        
+        'process to consolidate stock pack quantity
+        If consolidatedStock.Exists(materialKey) Then
+            'update its value
+            existingStockQty = consolidatedStock(materialKey)
+            Debug.Print "existingStockQty : " & existingStockQty
+            stockQty = stockQty + existingStockQty
+            Debug.Print "stockQty : " & stockQty
+            
+            
+            'remove old value
+            consolidatedStock.Remove materialKey
+            
+            'add updated value
+            consolidatedStock.Add materialKey, stockQty
+            
+        Else
+            'add key and value
+            consolidatedStock.Add materialKey, stockQty
+        
+        End If
+        
+    Next stockKey
+    Set consolidateStockQuantityObject = consolidatedStock
+    Debug.Print "End consolidateStockQuantityObject"
+    
+    
+
+End Function
+
+Public Function consolidatesortedStockData(sortedStockData As Object) As Object
+    Dim i As Long
+    Dim consolidatedStock As Object
+    Dim stockKey As Variant
+    Dim stockItem As clsStockData
+    Dim materialKey As String
+    Dim stockQty As Long
+    Dim existingStockQty As Long
+    
+    
+    
+    Debug.Print "enter consolidateStockQuantityObject "
+    Set consolidatedStock = CreateObject("Scripting.Dictionary")
+    
+    For i = 1 To sortedStockData.Count
+        'do something
+        Set stockItem = sortedStockData(i)
+        materialKey = stockItem.material
+        stockQty = stockItem.remainingStock
+        
+        Debug.Print "stockQty before add of " & materialKey & "is : " & stockQty
+        
+
+        
+        'process to consolidate stock pack quantity
+        If consolidatedStock.Exists(materialKey) Then
+            'update its value
+            existingStockQty = consolidatedStock(materialKey)
+            Debug.Print "existingStockQty : " & existingStockQty
+            stockQty = stockQty + existingStockQty
+            Debug.Print "stockQty : " & stockQty
+            
+            
+            'remove old value
+            consolidatedStock.Remove materialKey
+            
+            'add updated value
+            consolidatedStock.Add materialKey, stockQty
+            
+        Else
+            'add key and value
+            consolidatedStock.Add materialKey, stockQty
+        
+        End If
+        
+    Next i
+    Set consolidatesortedStockData = consolidatedStock
+    Debug.Print "End consolidateStockQuantityObject"
+
+End Function
+
+Public Function GetStandardDeviation() As Double
+    Dim stdDeviation As Double
+    stdDeviation = 1.5
+
+    GetStandardDeviation = stdDeviation
+    Debug.Print "GetStandardDeviation : " & GetStandardDeviation
+
+End Function
+
+Public Function CustomRoundUp(number As Double) As Double
+    ' Case 1: If the number is equal to or more than thousands, round up to the nearest hundred
+    If number >= 1000 Then
+        CustomRoundUp = Application.WorksheetFunction.Ceiling(number, 100)
+    
+    ' Case 2: If the number is more than hundreds but less than thousands, round up to the nearest ten
+    ElseIf number < 1000 Then
+        CustomRoundUp = Application.WorksheetFunction.Ceiling(number, 10)
+    End If
+End Function
+
+
+Public Sub printDemandResult(inputNetDemandOfDestination As Object, destinationPlantCode As String)
+    Dim ws As Worksheet
+    Dim materialKey As Variant
+    Dim currentRow As Long
+    Dim materialPack As Long
+    Dim netDemand As Long
+    
+    'set worksheet to "Demand_Result"
+    
+    Set ws = ThisWorkbook.Sheets("Demand_Result")
+    
+    
+    ' Start printing from row 2 (assuming row 1 has headers)
+    currentRow = 2
+    
+    ' Clear previous results only from row 2 onwards
+    'ws.Rows("2:" & ws.Rows.Count).ClearContents
+    
+    ' Clear contents for all columns except column C from row 2 onward
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    ws.Range("A2:B" & lastRow & ",D2:Z" & lastRow).ClearContents
+
+'    Dim rng As Range
+'    Set rng = ws.Range("A2:" & ws.Cells(ws.Rows.Count, ws.Columns.Count).Address)
+'
+'    Dim cell As Range
+'    For Each cell In rng
+'    If Not cell.HasFormula Then
+'        cell.ClearContents
+'    End If
+'    Next cell
+    
+    For Each materialKey In inputNetDemandOfDestination.keys
+        ws.Cells(currentRow, 1).Value = destinationPlantCode
+        
+        ws.Cells(currentRow, 2).Value = materialKey
+        
+        ws.Cells(currentRow, 4).Value = inputNetDemandOfDestination(materialKey) 'stock pack value
+        
+        
+        currentRow = currentRow + 1 ' Move to the next row
+        
+    Next materialKey
+
+
+End Sub
+
+ 
+Public Function GetNetTotalSupplyOfOrigin(sortedStockData As Object) As Object
+    Dim netSupplyOfOriginResult As Object
+    
+    Dim orderOfOriginPlant As Object
+    Dim originPlantCode As String
+    'Dim finalOriginAvailableStock As Object
+    
+    
+    originPlantCode = "4100"
+    Set orderOfOriginPlant = GetOrdersDemandByPlantCode(originPlantCode)
+    Debug.Print "orderOfOriginPlant.Count : " & orderOfOriginPlant.Count
+
+    
+    
+    Debug.Print "Before calling netSupplyOfOriginResult"
+    Set netSupplyOfOriginResult = CalculateNetStockAfterDeductedOrdersOfOriginPlant(originPlantCode, sortedStockData)
+    Set GetNetTotalSupplyOfOrigin = netSupplyOfOriginResult
+
+    
+End Function
+
+Public Function CalculateNetStockAfterDeductedOrdersOfOriginPlant(originPlantCode As String, sortedStockData As Object) As Object
+
+    Dim i As Long
+    Dim materialKey As Variant
+    Dim materialDemand As Long
+    
+    Dim materialStock As Long
+    Dim netSupply As Long
+    Dim netSupplyObject As Object
+    Dim stockItem As clsStockData
+    Dim stockKey As Variant
+    Dim toReducedQty As Long
+    
+    
+    Dim orderOfOriginPlant As Object
+    Dim consolidatedStock As Object
+    Dim materialChannelDictObject As Object
+    Dim materialChannel As String
+    
+    
+    Debug.Print "Enter CalculateNetStockAfterDeductedOrdersOfOriginPlant"
+    
+    
+    
+    
+    '------------- Validate for its own factory ---------------
+    Call ValidateProductLifeForSortedStockData(sortedStockData, False)
+    
+    '------------- End Validate Stock QI ----------------------
+    
+    
+    '-------------Initialize remainingStock for all stockItems in stockData
+    Call initialRemainingStockForDepletionTracking(sortedStockData)
+    
+    
+    Set orderOfOriginPlant = GetOrdersDemandByPlantCode(originPlantCode)
+    
+    Debug.Print "orderOfOriginPlant.count : " & orderOfOriginPlant.Count
+
+    For i = 1 To sortedStockData.Count
+        
+        Set stockItem = sortedStockData(i)
+        stockKey = stockItem.material
+        
+        Debug.Print "Enter loop of sortedStockData"
+        Debug.Print "stockKey : " & stockKey
+
+
+
+        materialDemand = IIf(orderOfOriginPlant.Exists(stockKey), orderOfOriginPlant(stockKey), 0)
+        Debug.Print "materialDemand : " & materialDemand
+        
+        materialStock = stockItem.remainingStock
+        Debug.Print "materialStock : " & materialStock
+        
+        
+        If materialDemand > 0 Then
+            'do this
+            
+            toReducedQty = Application.WorksheetFunction.Min(materialDemand, materialStock)
+            Debug.Print "toReducedQty : " & toReducedQty
+            
+            'Reduce Demand and Supply
+
+            'reduce demand
+            orderOfOriginPlant(stockKey) = materialDemand - toReducedQty
+            
+            'reduce supply
+            stockItem.remainingStock = materialStock - toReducedQty
+            
+            Debug.Print "stockItem.remainingStock : " & stockItem.remainingStock
+            
+            'check depletetion
+            If stockItem.remainingStock <= 0 Then
+                Debug.Print "stock Depleted"
+            End If
+
+        Else
+            'do that
+            Debug.Print "This supply has no origin demand, do nothing, pass it to next step"
+            
+        End If
+        
+    
+    Next i
+    
+   Debug.Print "End Test"
+
+    
+   '***************** End calculate it by consolidated ******************************
+    Set consolidatedStock = consolidatesortedStockData(sortedStockData)
+    Debug.Print "consolidatedStock.Count : " & consolidatedStock.Count
+
+
+    Set CalculateNetStockAfterDeductedOrdersOfOriginPlant = consolidatedStock
+
+    Debug.Print "End CalculateNetStockAfterDeductedOrdersOfOriginPlant"
+    
+
+End Function
+
+
+ 
+Public Function GetCurrentDate() As Date
+    Dim inputDate As String
+    Dim dateValue As Date
+    Dim ws As Worksheet
+    
+    ' Set reference to the "Truck_Arrange" sheet
+    Set ws = ThisWorkbook.Sheets("Truck_Arrange")
+    
+    ' Get the value from cell B2
+    inputDate = Trim(ws.Range("B2").Value)
+    Debug.Print "inputDate : " & inputDate
+    
+    ' Check if the input is empty
+    If inputDate = "" Then
+        MsgBox "Input loading date incorrect", vbExclamation
+        Exit Function
+    End If
+    
+    ' Check if the input is a valid date in the format "DD/MM/yyyy"
+    On Error Resume Next
+    dateValue = CDate(inputDate) ' Try to convert the input to a date
+    On Error GoTo 0
+    
+    
+    If IsDate(inputDate) = False Or Not IsValidDateFormat(inputDate) Then
+        MsgBox "Input loading date incorrect", vbExclamation
+        Exit Function
+    End If
+    
+    
+    ' Convert the input Buddhist Era date to AD using the helper function
+    inputDate = ConvertBuddhistEraToAD(inputDate)
+    'dateValue = CDate(inputDate)
+    dateValue = CDate(inputDate)
+    
+    
+    
+    ' Return the validated date value
+    Debug.Print "dateValue : " & dateValue
+    GetCurrentDate = dateValue
+    
+    If IsDate(GetCurrentDateFromSheet) Then
+        Debug.Print "GetCurrentDateFromSheet : Is date"
+    Else
+        Debug.Print "GetCurrentDateFromSheet : is not date"
+    End If
+    
+    Debug.Print "Final dateValue after all conversion : " & dateValue
+    
+End Function
+
+Public Function ConvertBuddhistEraToAD(inputDate As String) As String
+    Dim parts() As String
+    Dim yearBE As Integer
+    Dim yearAD As Integer
+    
+    ' Split the input date by "/"
+    parts = Split(inputDate, "/")
+    
+    ' Convert the year from BE to AD (subtract 543 from the year)
+    yearBE = CInt(parts(2))
+    Debug.Print "yearBE: " & yearBE
+    
+    If yearBE >= 2500 Then
+        yearAD = yearBE - 543
+    Else
+        yearAD = yearBE
+    End If
+    
+    Debug.Print "yearAD : " & yearAD
+    
+    ' Combine the day, month, and converted year into a valid date string
+    ConvertBuddhistEraToAD = parts(0) & "/" & parts(1) & "/" & yearAD
+    Debug.Print "ConvertBuddhistEraToAD : " & ConvertBuddhistEraToAD
+    
+    
+End Function
+
+
+' Helper function to validate if the date is in "DD/MM/yyyy" format
+Public Function IsValidDateFormat(inputDate As String) As Boolean
+    Dim parts() As String
+    Debug.Print "Enter IsValidDateFormat"
+    
+    ' Split the input by "/" and check if there are 3 parts
+    parts = Split(inputDate, "/")
+    If UBound(parts) <> 2 Then
+        IsValidDateFormat = False
+        Exit Function
+    End If
+    
+    ' Check if the day, month, and year are numeric
+    If IsNumeric(parts(0)) And IsNumeric(parts(1)) And IsNumeric(parts(2)) Then
+        ' Check if the day is between 1 and 31, month between 1 and 12, and year is 4 digits
+        If parts(0) >= 1 And parts(0) <= 31 And parts(1) >= 1 And parts(1) <= 12 And Len(parts(2)) = 4 Then
+            IsValidDateFormat = True
+        Else
+            IsValidDateFormat = False
+        End If
+    Else
+        IsValidDateFormat = False
+    End If
+    Debug.Print "End IsValidaDateFormat"
+End Function
+
+
+Public Function RetrieveMasterPlantData() As Object
+    Dim wsMasterPlant As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim materialCode As String
+    Dim basketSize As Double
+    Dim materialDescription As String
+    Dim masterData As Object
+    
+    ' Set worksheet reference
+    Set wsMasterPlant = ThisWorkbook.Sheets("MasterPlant")
+    
+    ' Initialize dictionary to store material data
+    Set masterData = CreateObject("Scripting.Dictionary")
+    
+    ' Determine last row in MasterPlant sheet (assuming row 1 is header)
+    lastRow = wsMasterPlant.Cells(wsMasterPlant.Rows.Count, 1).End(xlUp).Row
+    
+    ' Loop through rows to collect material data
+    For i = 2 To lastRow ' Assuming row 1 is headers
+        materialCode = wsMasterPlant.Cells(i, 1).Value ' Column A = Material Code
+        materialDescription = wsMasterPlant.Cells(i, 2).Value ' Column B = Material Description
+        basketSize = wsMasterPlant.Cells(i, 11).Value ' Column K = Basket Size
+        
+        ' Store data in dictionary
+        masterData.Add materialCode, CreateObject("Scripting.Dictionary")
+        masterData(materialCode)("MaterialDescription") = materialDescription
+        masterData(materialCode)("BasketSize") = basketSize
+    Next i
+    
+    ' Return dictionary with master data
+    Set RetrieveMasterPlantData = masterData
+End Function
+
+
+Public Function GetTotalDemandFromOnlySafetyStock() As Object
+    Dim safetyStock As Object
+    Dim totalDemand As Object
+    Dim material As Variant
+    
+    ' Initialize dictionaries
+    Set safetyStock = CalculateSafetyStock()
+    Set totalDemand = CreateObject("Scripting.Dictionary")
+    
+    ' Loop through safety stock and set it as total demand
+    For Each material In safetyStock.keys
+        totalDemand.Add material, safetyStock(material)
+    Next material
+    
+    Set GetTotalDemandFromOnlySafetyStock = totalDemand ' Return the dictionary
+End Function
+Public Function GetTotalDemandByComparingBetweenBalanceAndSafetyStock() As Object
+    Dim balanceDemand As Object
+    Dim safetyStock As Object
+    Dim totalDemand As Object
+    Dim material As Variant
+    
+    ' Initialize dictionaries
+    Set balanceDemand = GetBalanceDemand()
+    Set safetyStock = CalculateSafetyStock()
+    Set totalDemand = CreateObject("Scripting.Dictionary")
+    
+    ' Combine balance and safety stock, using the larger value as the total demand
+    For Each material In balanceDemand.keys
+        Dim total As Long
+        total = WorksheetFunction.Max(Abs(balanceDemand(material)), safetyStock(material))
+        totalDemand.Add material, total ' Add the larger value to total demand
+    Next material
+    
+    Set GetTotalDemandByComparingBetweenBalanceAndSafetyStock = totalDemand ' Return the dictionary
+End Function
+
+Public Function GetTotalDemandFromBalanceOnly() As Object
+    Dim balanceDemand As Object
+    Dim totalDemand As Object
+    Dim material As Variant
+    
+    ' Initialize dictionaries
+    Set balanceDemand = GetBalanceDemand()
+    Set totalDemand = CreateObject("Scripting.Dictionary")
+    
+    ' Use the absolute value of the balance demand as the total demand
+    For Each material In balanceDemand.keys
+        totalDemand.Add material, Abs(balanceDemand(material))
+    Next material
+    
+    Set GetTotalDemandFromBalanceOnly = totalDemand ' Return the dictionary
+End Function
+
+
+
+Public Function GetBalanceDemand() As Object
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim balanceDemand As Object
+    Dim materialKey As String
+    Dim balanceValue As Variant
+    
+    Set ws = ThisWorkbook.Sheets("Balance")
+    Set balanceDemand = CreateObject("Scripting.Dictionary") ' Use dictionary
+    Debug.Print "GetBalanceDemand Enter"
+    
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    ' Loop through Balance sheet rows
+    For i = 2 To lastRow ' Assuming row 1 is the header
+        balanceValue = ws.Cells(i, 14).Value
+        materialKey = CStr(ws.Cells(i, 1).Value) ' Convert Material (key) to String
+        Debug.Print "In loop of Balance" & "Balance = " & balanceValue
+        ' Only process rows where balance is numeric and negative
+        If IsNumeric(balanceValue) And balanceValue < 0 Then
+            
+            balanceDemand.Add materialKey, CLng(balanceValue) ' Add balance as value, Material as Key
+            Debug.Print "after add value of balance to object"
+        End If
+    Next i
+    
+    Set GetBalanceDemand = balanceDemand ' Return the dictionary
+    Debug.Print "END GetBalanceDemand"
+End Function
+
+Public Function CalculateSafetyStock() As Object
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim safetyStock As Object
+    Dim material As String
+    Dim safetyQty As Long
+    Dim i As Long
+    
+    ' Set the worksheet to "Safety_Stock"
+    Set ws = ThisWorkbook.Sheets("Safety_Stock")
+    Set safetyStock = CreateObject("Scripting.Dictionary") ' Use dictionary
+    
+    ' Find the last row of data in the Safety_Stock sheet
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    ' Loop through each row to collect the safety stock levels
+    For i = 2 To lastRow ' Assuming row 1 contains headers
+        material = CStr(ws.Cells(i, 2).Value) ' Column B contains Material codes, convert to string
+        Debug.Print "material : " & material
+        safetyQty = CLng(ws.Cells(i, 4).Value) ' Column D contains Safety_Qty_Pack
+        Debug.Print "safetyQty : " & safetyQty
+        
+        ' Add the material and its corresponding safety quantity to the dictionary
+        safetyStock.Add material, safetyQty
+        Debug.Print "after add value to safety stock collection"
+    Next i
+    
+    ' Return the dictionary with safety stock levels
+    Set CalculateSafetyStock = safetyStock
+End Function
+
+
+Public Function GetTotalDemandPlusSafetyStock() As Object
+    Dim balanceDemand As Object
+    Dim safetyStock As Object
+    Dim totalDemand As Object
+    Dim material As Variant
+    Dim key As String ' Define key as a string
+    
+    ' Initialize dictionaries
+    Set balanceDemand = CreateObject("Scripting.Dictionary")
+    Set safetyStock = CreateObject("Scripting.Dictionary")
+    Set totalDemand = CreateObject("Scripting.Dictionary")
+    
+    Debug.Print "before get demand"
+    Set balanceDemand = GetBalanceDemand()
+    Debug.Print "after get demand"
+    Set safetyStock = CalculateSafetyStock()
+    
+    Debug.Print "Here I am in GetTotalDemand()"
+    
+    ' Combine balance and safety stock
+    For Each material In balanceDemand.keys ' Iterate through keys
+        key = CStr(material) ' Convert material to string before using as key
+        
+        If safetyStock.Exists(key) Then ' Ensure the key exists in safetyStock
+            Dim total As Long
+            total = Abs(balanceDemand(key)) + safetyStock(key)
+            totalDemand.Add key, total ' Add the total to the dictionary with the key
+        Else
+            Debug.Print "Key not found in safetyStock: " & key
+        End If
+    Next material
+    
+    Debug.Print "after loop balanceDemand"
+    
+    Set GetTotalDemand = totalDemand ' Return the dictionary
+    Debug.Print "End getTotalDemand"
+    
+End Function
+
+
+Public Function GetSupplyData(currentDate As Date, plantCriteria As Object) As Object
+    Dim lastRow As Long
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim targetDate As Date
+    Dim plantCode As String
+    Dim stockPack As Double
+    Dim result As Object
+    'Dim dateCriteria As Variant
+    Dim resultKey As String
+    Dim material As String
+    Dim stockData As clsStockData ' Custom class to store stock data
+    Dim masterData As Object
+    Dim basketSize As Double
+    Debug.Print "get into GetSupplyData"
+
+    ' Initialize dictionary to store results
+    Set result = CreateObject("Scripting.Dictionary")
+
+    'Retrieve the master plant data
+    Set masterData = RetrieveMasterPlantData()
+
+    ' Set worksheet and ensure it exists
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets("Stock")
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        MsgBox "Sheet 'Stock' not found. Please check the sheet name."
+        Exit Function
+    End If
+
+    ' Define the data range
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    Debug.Print "before loop through data row"
+
+    ' Loop through data rows
+    For i = 2 To lastRow ' Assuming row 1 is the header
+        If IsDate(ws.Cells(i, 11).Value) Then
+            targetDate = CDate(ws.Cells(i, 11).Value) ' Column 11 is "Date"
+            plantCode = Trim(CStr(ws.Cells(i, 1).Value)) ' Column 1 is "Plant"
+            material = Trim(CStr(ws.Cells(i, 2).Value)) ' Column 2 is "Material" (used as the key)
+            materialDesc = Trim(CStr(ws.Cells(i, 3).Value))
+
+            ' Check if the material exists in master data to get the basket size
+            If masterData.Exists(material) Then
+                basketSize = masterData(material)("BasketSize")
+                Debug.Print "get basket Size by material from masterData"
+            Else
+                basketSize = 0 ' Default or handle case where basket size is missing
+            End If
+
+            ' Check if the plant code exists in plantCriteria using the Dictionary.Exists method
+            If plantCriteria.Exists(plantCode) Then
+                If Not IsError(ws.Cells(i, 13).Value) Then
+                    If IsNumeric(ws.Cells(i, 13).Value) And Trim(ws.Cells(i, 13).Value) <> "" Then
+                        Debug.Print "inside IsNumeric"
+                        stockPack = CDbl(ws.Cells(i, 13).Value) ' Convert value to double
+
+                        ' Create an instance of the clsStockData class and set its properties
+                        Set stockData = New clsStockData
+                        stockData.plantCode = plantCode
+                        stockData.targetDate = targetDate
+                        stockData.stockPack = stockPack
+                        stockData.material = material
+                        stockData.materialDesc = materialDesc
+                        stockData.basketSize = basketSize
+
+                        Debug.Print "Material: " & material & ", Date: " & targetDate ' Check the targetDate being assigned
+
+                        Debug.Print "before gen result key"
+                        'Create the key as "material-targetDate"
+                        resultKey = material & "-" & Format(targetDate, "dd/mm/yyyy")
+                        Debug.Print "gen resultkey of : " & resultKey
+
+                        ' If the resultKey exists, accumulate the stockPack (sum the quantities)
+                        If result.Exists(resultKey) Then
+                            ' Get the existing stockData and update its stockPack
+                            Debug.Print "Enter duplicate result key"
+                            Set stockData = result(resultKey)
+                            Debug.Print "Done update duplicateKey"
+                            stockData.stockPack = stockData.stockPack + stockPack
+                            Debug.Print "Done Update stockData of dup key"
+
+                            result.Remove resultKey
+                            Debug.Print "remove before add the new one"
+
+                            result.Add resultKey, stockData ' Update the object in the dictionary
+                            Debug.Print "Done added update object of dup result"
+                        Else
+                            ' If it doesn't exist, add it as a new entry
+                            Debug.Print "result key doesn't exist add the new one"
+                            result.Add resultKey, stockData
+                        End If
+                    End If
+                Else
+                    MsgBox "Error in value at row " & i & ": " & ws.Cells(i, 13).Text, vbCritical, "Error in Data"
+                End If
+            End If ' End plantCode filter
+        End If
+    Next i
+    Debug.Print "out of looping through data row"
+
+    ' Return the dictionary with material as key and stock data object as value
+    Set GetSupplyData = result
+    Debug.Print "End GetSupplyData"
+End Function
+
+Public Function GetSupplyDataByPlantCode(currentDate As Date, inputPlantCode As String) As Object
+    Dim lastRow As Long
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim targetDate As Variant
+    Dim plantCode As String
+    Dim stockPack As Double
+    Dim result As Object
+    
+    Dim materialChannel As String
+    Dim resultKey As String
+    Dim material As String
+    Dim stockData As clsStockData ' Custom class to store stock data
+    Dim masterData As Object
+    Dim basketSize As Double
+    
+    Dim materialChannelDictObject As Object
+    Set materialChannelDictObject = GetAllMaterialChannels()
+    
+    Debug.Print "get into GetSupplyData"
+
+    ' Initialize dictionary to store results
+    Set result = CreateObject("Scripting.Dictionary")
+
+    'Retrieve the master plant data
+    Set masterData = RetrieveMasterPlantData()
+
+    ' Set worksheet and ensure it exists
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets("Stock")
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        MsgBox "Sheet 'Stock' not found. Please check the sheet name."
+        Exit Function
+    End If
+
+    ' Define the data range
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    ' Define the date criteria (T-1, T-2, T-3)
+    'dateCriteria = Array(currentDate - 1, currentDate - 2, currentDate - 3)
+    Debug.Print "before loop through data row"
+
+    ' Loop through data rows
+    For i = 2 To lastRow ' Assuming row 1 is the header
+        If IsDate(ws.Cells(i, 11).Value) Or ws.Cells(i, 11).Value = "//" Then
+            
+            If ws.Cells(i, 11).Value = "//" Then
+                'do this
+                'Set New targetDate As String
+                
+                targetDate = ws.Cells(i, 11).Value ' Column 11 is "Date"
+            Else
+                'do that
+                targetDate = CDate(ws.Cells(i, 11).Value) ' Column 11 is "Date"
+            
+            End If
+            
+            
+            plantCode = Trim(CStr(ws.Cells(i, 1).Value)) ' Column 1 is "Plant"
+            material = Trim(CStr(ws.Cells(i, 2).Value)) ' Column 2 is "Material" (used as the key)
+            materialDesc = Trim(CStr(ws.Cells(i, 3).Value))
+
+            ' Check if the material exists in master data to get the basket size
+            If masterData.Exists(material) Then
+                basketSize = masterData(material)("BasketSize")
+                Debug.Print "get basket Size by material from masterData"
+            Else
+                basketSize = 0 ' Default or handle case where basket size is missing
+            End If
+
+            ' Check if the plant code exists in plantCriteria using the Dictionary.Exists method
+            If inputPlantCode = plantCode Then
+                If Not IsError(ws.Cells(i, 13).Value) Then
+                    If IsNumeric(ws.Cells(i, 13).Value) And Trim(ws.Cells(i, 13).Value) <> "" Then
+                        Debug.Print "inside IsNumeric"
+                        stockPack = CDbl(ws.Cells(i, 13).Value) ' Convert value to double
+
+                        ' Create an instance of the clsStockData class and set its properties
+                        Set stockData = New clsStockData
+                        stockData.plantCode = plantCode
+                        stockData.targetDate = targetDate
+                        stockData.stockPack = stockPack
+                        stockData.material = material
+                        stockData.materialDesc = materialDesc
+                        stockData.basketSize = basketSize
+                        stockData.materialChannel = materialChannelDictObject(material)
+                        
+
+                        Debug.Print "Material: " & material & ", Date: " & targetDate ' Check the targetDate being assigned
+
+                        Debug.Print "before gen result key"
+                        'Create the key as "material-targetDate"
+                        resultKey = material & "-" & Format(targetDate, "dd/mm/yyyy")
+                        Debug.Print "gen resultkey of : " & resultKey
+
+                        ' If the resultKey exists, accumulate the stockPack (sum the quantities)
+                        If result.Exists(resultKey) Then
+                            ' Get the existing stockData and update its stockPack
+                            Debug.Print "Enter duplicate result key"
+                            Set stockData = result(resultKey)
+                            Debug.Print "Done update duplicateKey"
+                            stockData.stockPack = stockData.stockPack + stockPack
+                            Debug.Print "Done Update stockData of dup key"
+
+                            result.Remove resultKey
+                            Debug.Print "remove before add the new one"
+
+                            result.Add resultKey, stockData ' Update the object in the dictionary
+                            Debug.Print "Done added update object of dup result"
+                        Else
+                            ' If it doesn't exist, add it as a new entry
+                            Debug.Print "result key doesn't exist add the new one"
+                            result.Add resultKey, stockData
+                        End If
+                    End If
+                Else
+                    MsgBox "Error in value at row " & i & ": " & ws.Cells(i, 13).Text, vbCritical, "Error in Data"
+                End If
+            End If ' End plantCode filter
+        End If
+    Next i
+    Debug.Print "out of looping through data row"
+
+    ' Return the dictionary with material as key and stock data object as value
+    Debug.Print " Supply by plant code result.Count : " & result.Count
+    Set GetSupplyDataByPlantCode = result
+    Debug.Print "End GetSupplyData"
+End Function
+
+Public Function GetAvailableStockByPlantCode(inputPlantCode As String) As Object
+    Dim supplyData As Object
+    Dim stockItem As clsStockData
+    Dim materialKey As Variant
+    Dim availableStock As Object
+    Dim currentDate As Date
+    Debug.Print "getting into available stock"
+    currentDate = GetCurrentDate()
+
+   
+    
+    Set supplyData = CreateObject("Scripting.Dictionary")
+    Set availableStock = CreateObject("Scripting.Dictionary")
+    
+    Debug.Print "before run into GetSupplyData"
+    
+    Set supplyData = GetSupplyDataByPlantCode(currentDate, inputPlantCode)
+    Debug.Print "after get supply data by date and plant"
+    
+    Debug.Print "before loop supplyData.Keys"
+'
+'    ' Debugging - Output the availableStock data
+'    For Each materialKey In availableStock.Keys
+'        Set stockItem = availableStock(materialKey)
+'        Debug.Print "Material: " & materialKey
+'        Debug.Print "Plant Code: " & stockItem.plantCode
+'        Debug.Print "Target Date: " & stockItem.targetDate
+'        Debug.Print "Stock Pack: " & stockItem.stockPack
+'    Next materialKey
+    
+    Set GetAvailableStockByPlantCode = supplyData
+    'Set GetAvailableStock = supplyData
+    Debug.Print "End get available Stock"
+
+End Function
+
+
+
+Public Function GetAvailableStock() As Object
+    Dim supplyData As Object
+    Dim stockItem As clsStockData
+    Dim materialKey As Variant
+    Dim availableStock As Object
+    Dim currentDate As Date
+    'Dim plantCriteria As New Collection
+    Debug.Print "getting into available stock"
+    ' Hardcoded date for testing
+    'currentDate = CDate("22/08/2024")
+    currentDate = GetCurrentDate()
+    Dim plantCriteria As Object
+    Set plantCriteria = CreateObject("Scripting.Dictionary")
+    plantCriteria.Add "4100", True
+    plantCriteria.Add "4004", True
+
+    
+    Set supplyData = CreateObject("Scripting.Dictionary")
+    Set availableStock = CreateObject("Scripting.Dictionary")
+    
+    Debug.Print "before run into GetSupplyData"
+    ' Assuming stock data is retrieved from the RetrieveStockDataByDateAndPlant() function
+    'Set stockData = RetrieveStockDataByDateAndPlant(currentDate, plantCriteria) ' Replace with actual stock retrieval function
+    'Set supplyData = GetSupplyData(currentDate, inputPlantCode)
+    Set supplyData = GetSupplyData(currentDate, plantCriteria)
+    Debug.Print "after get supply data by date and plant"
+    
+    Debug.Print "before loop supplyData.Keys"
+
+    For Each materialKey In supplyData.keys
+        Set stockItem = supplyData(materialKey)
+        If stockItem.plantCode = "4100" Then
+            availableStock.Add materialKey, stockItem
+        End If
+    Next materialKey
+
+    ' Debugging - Output the availableStock data
+    For Each materialKey In availableStock.keys
+        Set stockItem = availableStock(materialKey)
+        Debug.Print "Material: " & materialKey
+        Debug.Print "Plant Code: " & stockItem.plantCode
+        Debug.Print "Target Date: " & stockItem.targetDate
+        Debug.Print "Stock Pack: " & stockItem.stockPack
+    Next materialKey
+    
+    Set GetAvailableStock = availableStock
+    'Set GetAvailableStock = supplyData
+    Debug.Print "End get available Stock"
+
+
+End Function
+'Part 3 LOT and FIFO
+'3.1) Function to calculate product shelf life based on lot date and current date
+Public Function CalculateProductShelfLife(lotDate As Date) As Long
+    Debug.Print "Start CalculateProductShelfLife"
+    Dim currentDate As Date
+    'currentDate = Date 'Get today's date
+    
+    'currentDate = CDate("22/08/2024") ' Hardcoded date for testing
+    currentDate = GetCurrentDate()
+    Debug.Print "currentDate after get current date in cal product shelf life"
+    If IsDate(currentDate) Then
+        Debug.Print "currentDate is Date "
+    Else
+        Debug.Print "currentDate is not date"
+    End If
+    
+    currentDate = Format(currentDate, "DD/MM/YYYY")
+    
+    'Calculate shelf life in days
+    Debug.Print "lotDate of Product : " & lotDate
+    Debug.Print "current Date in CalculateProductShelfLife : " & currentDate
+    CalculateProductShelfLife = currentDate - lotDate
+    Debug.Print "CalculateProductShelfLife : " & CalculateProductShelfLife
+    
+End Function
+'3.2) Function to retrieve shelf life limit
+Public Function GetProductLifeLimit(materialCode As String) As Long
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim lifeLimit As Long
+    
+    Set ws = ThisWorkbook.Sheets("Product_Life_Limit")
+    Debug.Print "Enter GetProductLifeLimit"
+    
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    'Loop through Product-Life-Limit sheet rows to find matching material
+    For i = 2 To lastRow 'Assuming row 1 is the header
+        If ws.Cells(i, 1).Value = materialCode Then 'Match found
+            lifeLimit = ws.Cells(i, 3).Value
+            GetProductLifeLimit = ws.Cells(i, 3).Value 'Return product life limit
+            Exit Function
+        End If
+    Next i
+    
+    'if no match found, return -1 to indicate product us not limited
+    GetProductLifeLimit = -1
+    Debug.Print "End GetProduct life limit of : " & materialCode
+End Function
+
+Public Function ValidateProductLifeForStock(availableStock As Object, isTransferring As Boolean) As Object
+    Dim validStock As Object
+    Dim stockItem As clsStockData
+    Dim materialKey As Variant
+    Dim validationStatus As Boolean
+    Dim materialChannelDictObject As Object
+    Dim materialChannel As String
+    Dim materialDateString As String
+    
+    
+    
+    Set materialChannelDictObject = GetAllMaterialChannels()
+    validationStatus = False
+    Debug.Print "Enter Validate Product Life For Stock"
+    
+    
+    ' Initialize a dictionary to hold valid stock
+    Set validStock = CreateObject("Scripting.Dictionary")
+    
+    ' Loop through the available stock and validate product life
+    For Each materialKey In availableStock.keys
+        Set stockItem = availableStock(materialKey)
+        Debug.Print "Enter loop to Validate material key"
+        
+        materialChannel = materialChannelDictObject(stockItem.material)
+        materialDateString = CStr(stockItem.targetDate)
+        
+        
+        
+        'Check material Channel if it's 7Eleven we must send it to validation
+        If materialChannel = "7Eleven" And Not materialDateString = "//" Then
+            validationStatus = ValidateProductLife(stockItem.material, stockItem.targetDate, isTransferring)
+            ' Check if the product passes the life validation
+        Else
+            validationStatus = True
+        End If
+        
+        ' if passed validation add it to validStock
+        If validationStatus = True Then
+            ' If valid, add it to the validStock dictionary
+            validStock.Add materialKey, stockItem
+            End If
+        
+        
+    Next materialKey
+    Debug.Print "Done Validate"
+    ' Return the validated stock
+    Set ValidateProductLifeForStock = validStock
+    
+    Debug.Print "END ValidateProductLifeForStock"
+End Function
+
+
+Public Sub ValidateProductLifeForSortedStockData(sortedStockData As Object, isTransferring As Boolean)
+    'Dim validStock As New Collection
+    Dim stockItem As clsStockData
+    Dim materialKey As Variant
+    Dim validationStatus As Boolean
+    Dim materialChannelDictObject As Object
+    Dim materialChannel As String
+    Dim materialDateString As String
+    'Dim tempSortedStock
+    
+    Dim i As Long
+    
+    Set materialChannelDictObject = GetAllMaterialChannels()
+    validationStatus = False
+    Debug.Print "Enter Validate Product Life For sortedStockData"
+    
+    
+    For i = sortedStockData.Count To 1 Step -1
+        Set stockItem = sortedStockData(i)
+        Debug.Print "Enter loop to Validate stockItem"
+        
+        materialChannel = materialChannelDictObject(stockItem.material)
+        materialDateString = CStr(stockItem.targetDate)
+        
+        
+        'Check material Channel if it's 7Eleven we must send it to validation
+        If materialChannel = "7Eleven" And Not materialDateString = "//" Then
+            validationStatus = ValidateProductLife(stockItem.material, stockItem.targetDate, isTransferring)
+            ' Check if the product passes the life validation
+        Else
+            validationStatus = True
+        End If
+        
+        
+        ' if passed validation, do nothing
+        If validationStatus = True Then
+            'do nothing
+            
+        Else
+            ' not pass validation, remove it from collection
+            sortedStockData.Remove i
+        
+        End If
+    
+    
+    
+    Next i
+
+End Sub
+Public Function GetTransferLeadTime() As Long
+    Dim transferLeadTime As Long
+    transferLeadTime = ThisWorkbook.Sheets("Truck_Arrange").Range("E1").Value
+    
+    'Determine transfer Leadtime
+    If IsNumeric(transferLeadTime) Then
+        GetTransferLeadTime = transferLeadTime
+    Else
+        GetTransferLeadTime = 0
+    End If
+
+End Function
+
+
+'3.3) Validate product life for shipping
+'Function to validate if product can be shipped based on product life limit
+Public Function ValidateProductLife(materialCode As String, lotDate As Date, isTransferring As Boolean) As Boolean
+
+    'Fix the code to add transfer leadtime for origin plant, prevent Item to be QI at destination
+    
+    Dim transferLeadTime As Long
+    Dim shelfLife As Long
+    Dim lifeLimit As Long
+    
+    
+    transferLeadTime = 0
+    Debug.Print "Enter Validate Product life"
+    'Calculate the shelf life of the product
+    shelfLife = CalculateProductShelfLife(lotDate)
+    
+    
+    Debug.Print materialCode & " has shelf life : " & shelfLife & " day(s)"
+    
+    If isTransferring Then
+        transferLeadTime = GetTransferLeadTime()
+        Debug.Print "is origin plant, transferLeadTime : " & transferLeadTime
+        
+    End If
+    
+    
+    'Get the product life limit from the Product-Life-Limit sheet
+    lifeLimit = GetProductLifeLimit(materialCode)
+    Debug.Print materialCode & " has life limit : " & lifeLimit & " day(s)"
+    'if life limit is -1, this product is not subject to a life limit, so it can be shipped
+    If lifeLimit = -1 Then
+        ValidateProductLife = True
+    Else
+        'Check if the product's shelf life is within the limit
+        If isTransferring Then
+            ValidateProductLife = (lifeLimit - shelfLife - transferLeadTime > 0)
+        
+        Else
+            ValidateProductLife = (lifeLimit - shelfLife - transferLeadTime >= 0)
+        
+        End If
+        
+        
+    End If
+    Debug.Print "Done Validate Product Life"
+
+End Function
+'3.4) FiFO Logic
+Public Function ApplyFIFO(stockData As Object) As Collection
+    Dim sortedStockData As New Collection ' To store sorted stock
+    Dim stockItem As clsStockData ' To hold each stock data object
+    Dim stockList As Object ' Temporary list for storing stock data
+    Dim materialKey As Variant
+    Dim i As Long
+
+    ' Create an ArrayList to hold stock items
+    Set stockList = CreateObject("System.Collections.ArrayList")
+    
+    ' Add stock items to stockList with the targetDate as sorting criteria
+    For Each materialKey In stockData.keys
+        Set stockItem = stockData(materialKey)
+        stockList.Add stockItem
+    Next materialKey
+    
+    ' Call the merge sort function to sort the stockList by targetDate
+    Set stockList = MergeSort(stockList)
+    
+    ' Transfer the sorted items back to the collection (sortedStockData)
+    For i = 0 To stockList.Count - 1
+        sortedStockData.Add stockList(i)
+    Next i
+    
+    ' Return the sorted collection
+    Set ApplyFIFO = sortedStockData
+    Debug.Print "End ApplyFIFO"
+End Function
+
+' Merge Sort implementation to sort the stockList by targetDate
+Public Function MergeSort(stockList As Object) As Object
+    Dim mid As Long
+    Dim leftList As Object, rightList As Object
+    Dim result As Object
+    
+    ' If the list has only one element, it's already sorted
+    If stockList.Count <= 1 Then
+        Set MergeSort = stockList
+        Exit Function
+    End If
+
+    ' Split the list into two halves
+    mid = stockList.Count \ 2 ' Find the midpoint
+    
+    ' Create two ArrayLists for left and right halves
+    Set leftList = CreateObject("System.Collections.ArrayList")
+    Set rightList = CreateObject("System.Collections.ArrayList")
+    
+    ' Fill leftList with the first half
+    Dim i As Long
+    For i = 0 To mid - 1
+        leftList.Add stockList(i)
+    Next i
+    
+    ' Fill rightList with the second half
+    For i = mid To stockList.Count - 1
+        rightList.Add stockList(i)
+    Next i
+    
+    ' Recursively sort both halves
+    Set leftList = MergeSort(leftList)
+    Set rightList = MergeSort(rightList)
+    
+    ' Merge the sorted halves
+    Set result = Merge(leftList, rightList)
+    
+    ' Return the merged sorted list
+    Set MergeSort = result
+End Function
+
+Public Function Merge(leftList As Object, rightList As Object) As Object
+    Dim result As Object
+    Dim i As Long, j As Long
+    Dim currentMaterial As Variant
+    Dim leftMaterialGroup As Object
+    Dim rightMaterialGroup As Object
+    
+    ' Initialize ArrayList to store the merged result
+    Set result = CreateObject("System.Collections.ArrayList")
+    
+    ' Step 1: Group stock by material for both leftList and rightList
+    Set leftMaterialGroup = GroupByMaterial(leftList)
+    Set rightMaterialGroup = GroupByMaterial(rightList)
+    
+    ' Step 2: Merge material groups
+    For Each currentMaterial In leftMaterialGroup.keys
+        ' Ensure both left and right have data for this material
+        If rightMaterialGroup.Exists(currentMaterial) Then
+            ' Sort by targetDate within each material group and merge
+            Set result = MergeMaterialStock(leftMaterialGroup(currentMaterial), rightMaterialGroup(currentMaterial), result)
+        Else
+            ' Only leftList has data for this material, add remaining elements from leftList
+            AppendRemainingStock leftMaterialGroup(currentMaterial), result
+        End If
+    Next currentMaterial
+    
+    ' Step 3: Add remaining rightList elements for materials that only exist in rightList
+    For Each currentMaterial In rightMaterialGroup.keys
+        If Not leftMaterialGroup.Exists(currentMaterial) Then
+            AppendRemainingStock rightMaterialGroup(currentMaterial), result
+        End If
+    Next currentMaterial
+    
+    ' Return the merged sorted list
+    Set Merge = result
+End Function
+
+' Helper function to group stock by material
+Public Function GroupByMaterial(stockList As Object) As Object
+    Dim materialGroup As Object
+    Dim stockItem As clsStockData
+    Dim i As Long
+    Dim material As String
+    
+    Set materialGroup = CreateObject("Scripting.Dictionary")
+    
+    ' Group stock items by material
+    For i = 0 To stockList.Count - 1
+        Set stockItem = stockList(i)
+        material = stockItem.material
+        
+        If Not materialGroup.Exists(material) Then
+            Set materialGroup(material) = CreateObject("System.Collections.ArrayList")
+        End If
+        
+        materialGroup(material).Add stockItem
+    Next i
+    
+    Set GroupByMaterial = materialGroup
+End Function
+
+' Helper function to merge stock for a specific material, sorting by targetDate
+Public Function MergeMaterialStock(leftMaterialStock As Object, rightMaterialStock As Object, result As Object) As Object
+    Dim i As Long, j As Long
+    Dim delayedItems As Collection
+    Set delayedItems = New Collection  'holds items with "//" as targerDate
+    
+    
+    i = 0
+    j = 0
+    
+    ' Sort by targetDate for both left and right material stock
+    Set leftMaterialStock = MergeSort(leftMaterialStock)
+    Set rightMaterialStock = MergeSort(rightMaterialStock)
+    
+    ' Merge the sorted material stock
+    Do While i < leftMaterialStock.Count And j < rightMaterialStock.Count
+        'check for valid date in targetDate before comparing
+        If IsDate(leftMaterialStock(i).targetDate) And IsDate(rightMaterialStock(j).targetDate) Then
+        
+            'do comparing
+            If CDate(leftMaterialStock(i).targetDate) <= CDate(rightMaterialStock(j).targetDate) Then
+                result.Add leftMaterialStock(i)  ' Add the older stock first
+                i = i + 1
+            Else
+                result.Add rightMaterialStock(j)
+                j = j + 1
+            End If
+            
+        ElseIf IsDate(leftMaterialStock(i).targetDate) Then
+            ' If only the left item is a valid date, add it
+            result.Add leftMaterialStock(i)
+            i = i + 1
+            
+        ElseIf IsDate(rightMaterialStock(j).targetDate) Then
+            ' If only the right item is a valid date, add it
+            result.Add rightMaterialStock(j)
+            j = j + 1
+            
+        Else
+            ' If neither are valid dates, add them to delayedItems to be appended at the end
+            delayedItems.Add leftMaterialStock(i)
+            delayedItems.Add rightMaterialStock(j)
+            i = i + 1
+            j = j + 1
+        
+        End If
+        
+    Loop
+    
+    ' Add remaining elements from leftMaterialStock
+    Do While i < leftMaterialStock.Count
+        If IsDate(leftMaterialStock(i).targetDate) Then
+            result.Add leftMaterialStock(i)
+        Else
+            delayedItems.Add leftMaterialStock(i)
+        End If
+        i = i + 1
+    Loop
+    
+    ' Add remaining elements from rightMaterialStock
+    Do While j < rightMaterialStock.Count
+        If IsDate(rightMaterialStock(j).targetDate) Then
+            result.Add rightMaterialStock(j)
+        Else
+            delayedItems.Add rightMaterialStock(j)
+        End If
+        j = j + 1
+    Loop
+    
+    
+     ' Append all delayed items (with "//" as targetDate) at the end of the result
+    For Each Item In delayedItems
+        result.Add Item
+    Next Item
+    
+    
+    
+    Set MergeMaterialStock = result
+End Function
+
+' Helper function to append remaining stock for a material
+Public Sub AppendRemainingStock(stockList As Object, result As Object)
+    Dim i As Long
+    For i = 0 To stockList.Count - 1
+        result.Add stockList(i)
+    Next i
+End Sub
+
+
+
+Public Function GetTruckCapacityData() As Object
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim truckData As Object
+    Dim truckType As String
+    Dim truckCapacity As Long
+    Dim i As Long
+    
+    'Set the worksheet reference
+    Set ws = ThisWorkbook.Sheets("Truck_Setting")
+    
+    'Create a dictionary
+    Set truckData = CreateObject("Scripting.Dictionary")
+    
+    ' Find the last row with data in column B (TruckType)
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+    
+    ' Loop through the data in columns B and C to populate the dictionary
+    For i = 2 To lastRow ' Assuming row 1 has headers
+        truckType = Trim(ws.Cells(i, 2).Value) ' Get the truck type from column B
+        truckCapacity = CLng(ws.Cells(i, 3).Value) ' Get the truck capacity from column C
+        
+        ' Add the truck type and capacity to the dictionary
+        If Not truckData.Exists(truckType) Then
+            truckData.Add truckType, truckCapacity
+        End If
+    Next i
+    
+    ' Return the dictionary
+    Set GetTruckCapacityData = truckData
+    
+'    Dim key As Variant
+'    For Each key In truckData.keys
+'        Debug.Print "key : " & key & " value : " & truckData(key)
+'
+'    Next key
+    
+End Function
+
+'Part 4 Calculate Truck and Basket Arrangement
+'4.1) Function to get truck capacity based on user selection in cell B1
+'Public Function GetTruckCapacity() As Long
+'    Dim truckType As String
+'    Dim truckDataObject As Object
+'
+'    truckType = ThisWorkbook.Sheets("Truck_Arrange").Range("B1").Value
+'
+'    'Determine truck capacity based on type
+'    If truckType = "10_Wheel" Then
+'        GetTruckCapacity = 580 '10-Wheel truck can hold 580 baskets
+'    ElseIf truckType = "4_wheel" Then
+'        GetTruckCapacity = 90
+'    Else
+'        GetTruckCapacity = 0 'Invalid Truck Type
+'    End If
+'
+'End Function
+
+Public Function GetTruckCapacity() As Long
+    Dim truckType As String
+    Dim truckData As Object
+    
+    ' Get the truck capacity data as a dictionary
+    Set truckData = GetTruckCapacityData()
+    
+    truckType = ThisWorkbook.Sheets("Truck_Arrange").Range("B1").Value
+    
+    ' Retrieve the capacity for the given truck type
+    If truckData.Exists(truckType) Then
+        GetTruckCapacity = truckData(truckType)
+    Else
+        GetTruckCapacity = 0 ' Default capacity for invalid truck type
+    End If
+    
+End Function
+
+'4.3) Function to fully fill a truck with baskets
+Public Function FillTruckWithBaskets(basketData As Collection, truckCapacity As Long) As Collection
+    Dim totalBaskets As Long
+    Dim filledBaskets As New Collection
+    Dim basketItem As Variant
+    
+    totalBaskets = 0
+    
+    'Loop through basket data and add baskets to the truck
+    For Each basketItem In basketData
+        If totalBaskets + basketItem <= truckCapacity Then
+            filledBaskets.Add basketItem
+            totalBaskets = totalBaskets + basketItem
+        Else
+            Exit For 'Stop if truck Capacity is reached
+        End If
+    Next basketItem
+    
+    Set FillTruckWithBaskets = filledBaskets
+    
+End Function
+
+
+
+' Helper function for calculating baskets
+Public Function CalculateBaskets(stockPack As Double, basketSize As Double) As Long
+    If basketSize > 0 Then
+        CalculateBaskets = Application.WorksheetFunction.RoundUp(stockPack / basketSize, 0)
+    Else
+        CalculateBaskets = 0
+    End If
+End Function
+
+Public Function GetAllMaterialChannels() As Object
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim materialChannelDict As Object
+    Dim materialCode As String
+    Dim channel As String
+    
+    
+    Debug.Print "Enter GetAllMaterialChannels"
+    ' Set reference to the "Material_Channel" sheet
+    Set ws = ThisWorkbook.Sheets("Material_Channel")
+
+    ' Create a dictionary to store material-channel pairs
+    Set materialChannelDict = CreateObject("Scripting.Dictionary")
+
+    ' Find the last row in the "Material_Channel" sheet
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    ' Loop through the rows to get all materials and their channels
+    For i = 2 To lastRow ' Assuming row 1 is the header
+        materialCode = ws.Cells(i, 1).Value ' Column 2 has material codes
+        Debug.Print "materialCode : " & materialCode
+        channel = ws.Cells(i, 4).Value ' Column 4 has the channel
+        Debug.Print "channel : " & channel
+
+        ' Add the material code and channel to the dictionary
+        If Not materialChannelDict.Exists(materialCode) Then
+            materialChannelDict.Add materialCode, channel
+        End If
+    Next i
+
+    ' Return the dictionary
+    Set GetAllMaterialChannels = materialChannelDict
+End Function
+
+
+
+
+Public Function CalculateBasketsForTruck(stockData As Collection, truckCapacity As Long, totalDemand As Object, netSupply As Object) As Object
+    Dim basketData As Object
+    Dim remainingCapacity As Long
+    Dim stockItem As clsStockData
+    Dim basketsNeeded As Long
+    Dim materialDemand As Double
+    Dim basketsToLoad As Long
+    Dim i As Long
+    Dim quantityToAddToBasket As Long
+    Dim maxCapQty As Long
+    Dim stockQty As Long
+    Dim existingStock As clsStockData
+    Dim newStock As clsStockData
+    Dim usedBasket As Long
+    Dim materialNetSupply As Long
+    Dim basketAddedCounterDictObject As Object
+    
+    Debug.Print "Enter CalculateBasketsForTruck"
+
+    ' Use Dictionary for basketData
+    Set basketAddedCounterDictObject = CreateObject("Scripting.Dictionary")
+    Set basketData = CreateObject("Scripting.Dictionary")
+    remainingCapacity = truckCapacity ' Initialize with full truck capacity
+    Debug.Print "remainingCapacity: " & remainingCapacity
+
+    ' Initialize remainingStock for all stockItems in stockData
+    'Call initialRemainingStockForDepletionTracking(stockData)
+
+    ' Calculate total basket demand for all materials in stockData collection
+    Dim demandSum As Double
+    For i = 1 To stockData.Count ' Loop through stockData collection
+        Set stockItem = stockData(i) ' Get the clsStockData object at index i
+        If totalDemand.Exists(stockItem.material) Then
+            materialDemand = totalDemand(stockItem.material)
+            demandSum = demandSum + materialDemand
+        End If
+    Next i
+    Debug.Print "Total demand sum calculated: " & demandSum
+
+    ' Step 1: Handle the case where demand exceeds truck capacity
+    If demandSum > truckCapacity Then
+        Debug.Print "Demand exceeds truck capacity. Distributing proportionally."
+
+        For i = 1 To stockData.Count
+            Set stockItem = stockData(i)
+            If totalDemand.Exists(stockItem.material) Then
+                materialDemand = totalDemand(stockItem.material)
+                basketsToLoad = WorksheetFunction.Min(remainingCapacity, CalculateBaskets(materialDemand, stockItem.basketSize))
+                materialNetSupply = netSupply(stockItem.material)
+
+                ' Determine how much to add to the basket
+                quantityToAddToBasket = GetQuantityToAdd(materialNetSupply, materialDemand, basketsToLoad, stockItem)
+                
+                If quantityToAddToBasket > 0 Then
+                    ' Update basketData and remaining capacity
+                    UpdateBasketData basketData, stockItem, quantityToAddToBasket, CLng(materialDemand), materialNetSupply, totalDemand, netSupply
+    
+                    usedBasket = CalculateBaskets(CDbl(quantityToAddToBasket), stockItem.basketSize)
+                    remainingCapacity = remainingCapacity - usedBasket
+                Else
+                    'do nothing
+                End If
+
+                If remainingCapacity <= 0 Then Exit For ' Stop if the truck is full
+            End If
+        Next i
+    Else
+        ' Step 2: Handle the case where demand fits within truck capacity
+        Debug.Print "Demand fits within truck capacity."
+        For i = 1 To stockData.Count
+            Set stockItem = stockData(i)
+            If totalDemand.Exists(stockItem.material) Then
+                materialDemand = totalDemand(stockItem.material)
+                basketsToLoad = CalculateBaskets(materialDemand, stockItem.basketSize)
+                materialNetSupply = netSupply(stockItem.material)
+
+                ' Determine how much to add to the basket
+                quantityToAddToBasket = GetQuantityToAdd(materialNetSupply, materialDemand, basketsToLoad, stockItem)
+                
+                If quantityToAddToBasket > 0 Then
+                    
+                    ' Update basketData and remaining capacity
+                    UpdateBasketData basketData, stockItem, quantityToAddToBasket, CLng(materialDemand), materialNetSupply, totalDemand, netSupply
+    
+                    usedBasket = CalculateBaskets(CDbl(quantityToAddToBasket), stockItem.basketSize)
+                    remainingCapacity = remainingCapacity - usedBasket
+                Else
+                    ' do nothing
+                End If
+
+                If remainingCapacity <= 0 Then Exit For ' Stop if the truck is full
+            End If
+        Next i
+    End If
+
+    ' Step 3: Log if the truck is not fully loaded
+    If remainingCapacity > 0 Then
+        Debug.Print "Truck is not fully loaded. Remaining capacity: " & remainingCapacity
+    End If
+
+    ' Return the filled truck data
+    Set CalculateBasketsForTruck = basketData
+    Debug.Print "End of CalculateBasketsForTruck"
+End Function
+
+
+' Helper function to calculate the quantity to add to the basket
+Private Function GetQuantityToAdd(materialNetSupply As Long, materialDemand As Double, basketsToLoad As Long, stockItem As clsStockData) As Long
+    Dim maxCapQty As Long
+    Dim stockQty As Long
+    Dim quantityToAdd As Long
+
+    maxCapQty = basketsToLoad * stockItem.basketSize
+    stockQty = stockItem.remainingStock
+
+    ' Set quantity to add based on the smallest value
+    quantityToAdd = WorksheetFunction.Min(materialNetSupply, materialDemand, maxCapQty, stockQty)
+
+    GetQuantityToAdd = quantityToAdd
+End Function
+
+Private Sub UpdateBasketData(basketData As Object, stockItem As clsStockData, quantityToAdd As Long, materialDemand As Long, materialNetSupply As Long, totalDemand As Object, netSupply As Object)
+    Dim existingStock As clsStockData
+    Dim existingQty As Long
+    Dim counterValue As Long
+    Dim stockItemKey As String
+    Dim existingCounterValue As Long
+    Dim toAddStockItem As clsStockData
+    
+    ' I forget to add stock Item to basketData
+    
+    Debug.Print "*** Enter UpdateBasketData *** "
+    Debug.Print " materialDemand : " & materialDemand
+    Debug.Print " materialNetSupply : " & materialNetSupply
+    
+    Debug.Print " Started  quantityToAdd : " & quantityToAdd
+    stockItemKey = stockItem.material
+    
+    'Do the depletion for Net Demand/Supply
+        
+    
+    If Not basketData.Exists(stockItemKey & "-" & stockItem.targetDate) Then
+        Debug.Print "This material have never been added to basketData, add the new one"
+        
+        Set toAddStockItem = stockItem
+        toAddStockItem.stockPack = quantityToAdd
+        
+        
+        basketData.Add toAddStockItem.material & "-" & toAddStockItem.targetDate, toAddStockItem
+        
+        
+    Else
+        Debug.Print "this material had been added, get it transaction"
+        'get counterValue
+        
+        Set existingStock = basketData(stockItemKey & "-" & stockItem.targetDate)
+        existingQty = existingStock.stockPack
+        
+
+        Debug.Print "existingQty : " & existingQty
+        
+     
+        'do basket operation
+        '*** start update basketData***
+        'update existingQty and existingStock.stockPack
+        existingQty = existingQty + quantityToAdd
+        
+        existingStock.stockPack = existingQty
+        
+        'removing before add new one
+        basketData.Remove stockItemKey & "-" & existingStock.targetDate
+        
+        'add the updated one
+        basketData.Add stockItemKey & "-" & existingStock.targetDate, existingStock
+        '*** End add stockItem back to basketData***
+    
+    End If
+    
+    'reduce netSupply
+    Debug.Print "At the end quantityToAdd : " & quantityToAdd
+    Debug.Print " before reduce --->"
+    Debug.Print "stockItemKey : " & stockItemKey
+    Debug.Print "netSupply(stockItemKey) : " & netSupply(stockItemKey)
+    Debug.Print "totalDemand(stockItemKey) : " & totalDemand(stockItemKey)
+    Debug.Print "stockItem.remainingStock : " & stockItem.remainingStock
+    
+    netSupply(stockItemKey) = materialNetSupply - quantityToAdd
+
+    'reduce totalDemand
+    Debug.Print "materialDemand before reducing : " & materialNetDemand
+    Debug.Print "quantityToAdd before reducing : " & quantityToAdd
+    totalDemand(stockItemKey) = materialDemand - quantityToAdd
+    
+    'reduce the item.remainingStock
+    stockItem.remainingStock = stockItem.remainingStock - quantityToAdd
+    
+    Debug.Print " After reduce --->"
+    Debug.Print "stockItemKey : " & stockItemKey
+    Debug.Print "netSupply(stockItemKey) : " & netSupply(stockItemKey)
+    Debug.Print "totalDemand(stockItemKey) : " & totalDemand(stockItemKey)
+    Debug.Print "stockItem.remainingStock : " & stockItem.remainingStock
+    
+    
+    Debug.Print "*** End updated Basket Data ***"
+End Sub
+
+Public Sub initialRemainingStockForDepletionTracking(stockData As Collection)
+    Dim stockItem As clsStockData
+    Dim i As Long
+
+    ' Loop through all stockData items to initialize remainingStock
+    For i = 1 To stockData.Count
+        Set stockItem = stockData(i)
+        stockItem.remainingStock = stockItem.stockPack ' Initialize remainingStock to be the full stockPack value
+        Debug.Print "Initialized remainingStock for Material: " & stockItem.material & ", remainingStock: " & stockItem.remainingStock
+    Next i
+End Sub
+
+Public Function GetDisplaySetting() As Object
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim disPlaySetting As Object
+    Dim columnName As String
+    Dim showDisplay As String
+    Dim i As Long
+
+    ' Set the worksheet reference to "Display_Setting"
+    Set ws = ThisWorkbook.Sheets("Display_Setting")
+
+    ' Initialize the dictionary to store settings
+    Set disPlaySetting = CreateObject("Scripting.Dictionary")
+
+    ' Find the last row with data in the "Column Name" column (column A)
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    ' Loop through the settings and add them to the dictionary
+    For i = 2 To lastRow ' Assuming row 1 contains headers
+        columnName = Trim(ws.Cells(i, 1).Value) ' Column A: Column Name
+        showDisplay = Trim(ws.Cells(i, 2).Value) ' Column B: Show Display (Yes/No)
+        disPlaySetting.Add columnName, showDisplay
+    Next i
+
+    ' Return the dictionary
+    Set GetDisplaySetting = disPlaySetting
+End Function
+
+
+'Public Sub FinalizeLotStamping(truckArrangeSheet As Worksheet, lotData As Object)
+'    Dim currentRow As Long
+'    Dim lotDetail As Variant
+'    Dim recordNumber As Long
+'    Dim material As String
+'    Dim materialInfo As clsStockData
+'    Dim stockPack As Double
+'    Dim basketQty As Double
+'    Dim basketSize As Double
+'    Dim lotSummary As String
+'    Dim totalBasketQty As Double
+'    Dim lotDictionary As Object
+'    Dim materialKey As Variant
+'    Dim targetDate As String
+'    Dim consolidatedStockPack As Double
+'    Dim consolidatedBasketQty As Double
+'
+'    Dim lastRow As Long
+'    Dim disPlaySetting As Object
+'
+'    'Set disPlaySetting
+'    Set disPlaySetting = GetDisplaySetting()
+'
+'    ' Get the last row that has data in column A
+'    Debug.Print " ---FinalizeLotStamping--- "
+'    lastRow = truckArrangeSheet.Cells(truckArrangeSheet.Rows.Count, "A").End(xlUp).Row
+'
+'    ' Ensure that we only clear from row 4 onward
+'    If lastRow >= 5 Then
+'    truckArrangeSheet.Range("A5:G" & lastRow).ClearContents
+'    End If
+'
+'
+'    ' Start from row 4 (Headers in row 3)
+'    currentRow = 5
+'    recordNumber = 1
+'    totalBasketQty = 0
+'
+'    ' Initialize dictionary to store LOT summary per material
+'    Set lotDictionary = CreateObject("Scripting.Dictionary")
+'
+'    ' Loop through the lotData collection to consolidate data
+'    For Each materialKey In lotData.keys
+'        Set materialInfo = lotData(materialKey)
+'
+'        ' Extract the material and targetDate from the materialKey (format: material-targetDate)
+'        material = Split(materialKey, "-")(0)
+'        targetDate = Split(materialKey, "-")(1)
+'
+'        ' Retrieve data from previous calculations
+'        stockPack = materialInfo.stockPack
+'        basketSize = materialInfo.basketSize
+'        materialDesc = materialInfo.materialDesc
+'
+'        Debug.Print "material : " & material
+'
+'        ' Calculate Basket_Qty
+'        If basketSize > 0 Then
+'
+'            basketQty = Application.WorksheetFunction.RoundUp(stockPack / basketSize, 0)
+'            Debug.Print "basketQty : " & basketQty
+'        Else
+'            basketQty = 0 ' Avoid division by zero
+'        End If
+'
+'        ' Aggregate stock and LOT details for each material
+'        If lotDictionary.Exists(material) Then
+'            ' Update stockPack and basketQty for the material by summing quantities
+'            lotDictionary(material)("stockPack") = lotDictionary(material)("stockPack") + stockPack
+'            lotDictionary(material)("basketQty") = lotDictionary(material)("basketQty") + basketQty
+'            ' Update lotSummary for the material by appending new lot details
+'            lotDictionary(material)("lotSummary") = lotDictionary(material)("lotSummary") & ", Lot " & targetDate & ": " & stockPack
+'        Else
+'            ' First entry for this material
+'            Set lotDictionary(material) = CreateObject("Scripting.Dictionary")
+'            lotDictionary(material)("stockPack") = stockPack
+'            lotDictionary(material)("basketQty") = basketQty
+'            lotDictionary(material)("lotSummary") = "Lot " & targetDate & ": " & stockPack
+'            lotDictionary(material)("materialDesc") = materialDesc
+'            lotDictionary(material)("basketSize") = basketSize
+'        End If
+'    Next materialKey
+'
+'    ' Now write the consolidated data to the worksheet
+'    Dim dictKey As Variant ' Correctly declare the key variable as a Variant
+'
+'    For Each dictKey In lotDictionary.keys
+'        ' Retrieve consolidated data
+'        consolidatedStockPack = lotDictionary(dictKey)("stockPack")
+'
+'        'consolidatedBasketQty = lotDictionary(dictKey)("basketQty")
+'
+'        lotSummary = lotDictionary(dictKey)("lotSummary")
+'        materialDesc = lotDictionary(dictKey)("materialDesc")
+'        basketSize = lotDictionary(dictKey)("basketSize")
+'        consolidatedBasketQty = Application.WorksheetFunction.RoundUp(consolidatedStockPack / basketSize, 0)
+'        ' Set data in the corresponding columns of the "Truck_Arrange" sheet
+'        truckArrangeSheet.Cells(currentRow, 1).Value = recordNumber ' "#"
+'        truckArrangeSheet.Cells(currentRow, 2).Value = dictKey ' "Material"
+'        truckArrangeSheet.Cells(currentRow, 3).Value = materialDesc ' "Material Description"
+'        truckArrangeSheet.Cells(currentRow, 4).Value = consolidatedStockPack ' "Stock_pack"
+'        truckArrangeSheet.Cells(currentRow, 5).Value = consolidatedBasketQty ' "Basket_Qty"
+'        truckArrangeSheet.Cells(currentRow, 6).Value = lotSummary ' "LOT"
+'        truckArrangeSheet.Cells(currentRow, 7).Value = basketSize ' "Basket_Size"
+'
+'
+'
+'        ' Check the display setting for the LOT column
+'        If LCase(disPlaySetting("LOT")) = "no" Then
+'            ' Make the font invisible for the "LOT" column
+'            truckArrangeSheet.Cells(currentRow, 6).Font.Color = truckArrangeSheet.Cells(currentRow, 6).Interior.Color
+'
+'        ElseIf LCase(disPlaySetting("LOT")) = "yes" Then
+'        ' Reset the font color to default (visible)
+'        truckArrangeSheet.Cells(currentRow, 6).Font.Color = vbBlack
+'
+'        End If
+'
+'
+'        ' Add to total basket quantity
+'        totalBasketQty = totalBasketQty + consolidatedBasketQty
+'
+'        ' Increment row and record number
+'        currentRow = currentRow + 1
+'        recordNumber = recordNumber + 1
+'    Next dictKey
+'
+'    ' Output total basket quantity in cell E24
+'    truckArrangeSheet.Cells(25, 5).Value = totalBasketQty
+'
+'    ' Debugging to check the lot summaries and stock data
+'    Debug.Print "Finalized Lot Data:"
+'    Debug.Print "Total Basket Quantity: " & totalBasketQty
+'End Sub
+
+Public Sub FinalizeLotStamping(truckArrangeSheet As Worksheet, lotData As Object)
+    Dim currentRow As Long
+    Dim lotDetail As Variant
+    Dim recordNumber As Long
+    Dim material As String
+    Dim materialInfo As clsStockData
+    Dim stockPack As Double
+    Dim basketQty As Double
+    Dim basketSize As Double
+    Dim lotSummary As String
+    Dim totalBasketQty As Double
+    Dim lotDictionary As Object
+    Dim materialKey As Variant
+    Dim targetDate As String
+    Dim consolidatedStockPack As Double
+    Dim consolidatedBasketQty As Double
+    Dim materialChannel As String
+    
+    Dim lastRow As Long
+    Dim disPlaySetting As Object
+    
+    'Set disPlaySetting
+    Set disPlaySetting = GetDisplaySetting()
+    
+    ' Get the last row that has data in column A
+    Debug.Print " ---FinalizeLotStamping--- "
+    lastRow = truckArrangeSheet.Cells(truckArrangeSheet.Rows.Count, "A").End(xlUp).Row
+
+    ' Ensure that we only clear from row 4 onward
+    If lastRow >= 5 Then
+    truckArrangeSheet.Range("A5:G" & lastRow).ClearContents
+    End If
+
+    
+    ' Start from row 4 (Headers in row 3)
+    currentRow = 5
+    recordNumber = 1
+    totalBasketQty = 0
+    
+    ' Initialize dictionary to store LOT summary per material
+    Set lotDictionary = CreateObject("Scripting.Dictionary")
+    
+    ' Loop through the lotData collection to consolidate data
+    For Each materialKey In lotData.keys
+        Set materialInfo = lotData(materialKey)
+        
+        ' Extract the material and targetDate from the materialKey (format: material-targetDate)
+        material = Split(materialKey, "-")(0)
+        targetDate = Split(materialKey, "-")(1)
+        
+        ' Retrieve data from previous calculations
+        stockPack = materialInfo.stockPack
+        basketSize = materialInfo.basketSize
+        materialDesc = materialInfo.materialDesc
+        materialChannel = materialInfo.materialChannel
+        
+        Debug.Print "material : " & material
+        
+        ' Calculate Basket_Qty
+        If basketSize > 0 Then
+            
+            basketQty = Application.WorksheetFunction.RoundUp(stockPack / basketSize, 0)
+            Debug.Print "basketQty : " & basketQty
+        Else
+            basketQty = 0 ' Avoid division by zero
+        End If
+        
+        ' Aggregate stock and LOT details for each material
+        If lotDictionary.Exists(material) Then
+            ' Update stockPack and basketQty for the material by summing quantities
+            lotDictionary(material)("stockPack") = lotDictionary(material)("stockPack") + stockPack
+            lotDictionary(material)("basketQty") = lotDictionary(material)("basketQty") + basketQty
+            ' Update lotSummary for the material by appending new lot details
+            lotDictionary(material)("lotSummary") = lotDictionary(material)("lotSummary") & ", Lot " & targetDate & ": " & stockPack
+        Else
+            ' First entry for this material
+            Set lotDictionary(material) = CreateObject("Scripting.Dictionary")
+            lotDictionary(material)("stockPack") = stockPack
+            lotDictionary(material)("basketQty") = basketQty
+            lotDictionary(material)("lotSummary") = "Lot " & targetDate & ": " & stockPack
+            lotDictionary(material)("materialDesc") = materialDesc
+            lotDictionary(material)("basketSize") = basketSize
+            lotDictionary(material)("materialChannel") = materialChannel
+        End If
+    Next materialKey
+    
+    ' Now write the consolidated data to the worksheet
+    Dim dictKey As Variant ' Correctly declare the key variable as a Variant
+    
+    ' First Pass: Print all "7Eleven" channel materials
+    For Each dictKey In lotDictionary.keys
+        If lotDictionary(dictKey)("materialChannel") = "7Eleven" Then
+            ' Retrieve consolidated data
+            consolidatedStockPack = lotDictionary(dictKey)("stockPack")
+            lotSummary = lotDictionary(dictKey)("lotSummary")
+            materialDesc = lotDictionary(dictKey)("materialDesc")
+            basketSize = lotDictionary(dictKey)("basketSize")
+            materialChannel = lotDictionary(dictKey)("materialChannel")
+            
+            consolidatedBasketQty = Application.WorksheetFunction.RoundUp(consolidatedStockPack / basketSize, 0)
+            
+            ' Set data in the corresponding columns of the "Truck_Arrange" sheet
+            truckArrangeSheet.Cells(currentRow, 1).Value = recordNumber ' "#"
+            truckArrangeSheet.Cells(currentRow, 2).Value = dictKey ' "Material"
+            truckArrangeSheet.Cells(currentRow, 3).Value = materialDesc ' "Material Description"
+            truckArrangeSheet.Cells(currentRow, 4).Value = consolidatedStockPack ' "Stock_pack"
+            truckArrangeSheet.Cells(currentRow, 5).Value = consolidatedBasketQty ' "Basket_Qty"
+            truckArrangeSheet.Cells(currentRow, 6).Value = lotSummary ' "LOT"
+            truckArrangeSheet.Cells(currentRow, 7).Value = basketSize ' "Basket_Size"
+            
+            ' Check the display setting for the LOT column
+            If LCase(disPlaySetting("LOT")) = "no" Then
+                ' Make the font invisible for the "LOT" column
+                truckArrangeSheet.Cells(currentRow, 6).Font.Color = truckArrangeSheet.Cells(currentRow, 6).Interior.Color
+            ElseIf LCase(disPlaySetting("LOT")) = "yes" Then
+                ' Reset the font color to default (visible)
+                truckArrangeSheet.Cells(currentRow, 6).Font.Color = vbBlack
+            End If
+            
+            ' Add to total basket quantity
+            totalBasketQty = totalBasketQty + consolidatedBasketQty
+            
+            ' Increment row and record number
+            currentRow = currentRow + 1
+            recordNumber = recordNumber + 1
+        End If
+    Next dictKey
+    
+    ' Second Pass: Print all "Non-7Eleven" channel materials
+    For Each dictKey In lotDictionary.keys
+        If lotDictionary(dictKey)("materialChannel") <> "7Eleven" Then
+            ' Retrieve consolidated data
+            consolidatedStockPack = lotDictionary(dictKey)("stockPack")
+            lotSummary = lotDictionary(dictKey)("lotSummary")
+            materialDesc = lotDictionary(dictKey)("materialDesc")
+            basketSize = lotDictionary(dictKey)("basketSize")
+            materialChannel = lotDictionary(dictKey)("materialChannel")
+            
+            consolidatedBasketQty = Application.WorksheetFunction.RoundUp(consolidatedStockPack / basketSize, 0)
+            
+            ' Set data in the corresponding columns of the "Truck_Arrange" sheet
+            truckArrangeSheet.Cells(currentRow, 1).Value = recordNumber ' "#"
+            truckArrangeSheet.Cells(currentRow, 2).Value = dictKey ' "Material"
+            truckArrangeSheet.Cells(currentRow, 3).Value = materialDesc ' "Material Description"
+            truckArrangeSheet.Cells(currentRow, 4).Value = consolidatedStockPack ' "Stock_pack"
+            truckArrangeSheet.Cells(currentRow, 5).Value = consolidatedBasketQty ' "Basket_Qty"
+            truckArrangeSheet.Cells(currentRow, 6).Value = lotSummary ' "LOT"
+            truckArrangeSheet.Cells(currentRow, 7).Value = basketSize ' "Basket_Size"
+            
+            ' Check the display setting for the LOT column
+            If LCase(disPlaySetting("LOT")) = "no" Then
+                ' Make the font invisible for the "LOT" column
+                truckArrangeSheet.Cells(currentRow, 6).Font.Color = truckArrangeSheet.Cells(currentRow, 6).Interior.Color
+            ElseIf LCase(disPlaySetting("LOT")) = "yes" Then
+                ' Reset the font color to default (visible)
+                truckArrangeSheet.Cells(currentRow, 6).Font.Color = vbBlack
+            End If
+            
+            ' Add to total basket quantity
+            totalBasketQty = totalBasketQty + consolidatedBasketQty
+            
+            ' Increment row and record number
+            currentRow = currentRow + 1
+            recordNumber = recordNumber + 1
+        End If
+    Next dictKey
+    
+    
+    ' Output total basket quantity in cell E24
+    truckArrangeSheet.Cells(25, 5).Value = totalBasketQty
+    
+    ' Debugging to check the lot summaries and stock data
+    Debug.Print "Finalized Lot Data:"
+    Debug.Print "Total Basket Quantity: " & totalBasketQty
+End Sub
+
+Public Sub RunShippingProcess()
+    Dim balanceDemand As Collection
+    Dim safetyStock As Collection
+    
+    Dim totalDemand As Object
+    Dim availableStock As Object
+    Dim sortedStockData As Object
+    Dim truckCapacity As Long
+    Dim basketData As Collection
+    Dim filledTruck As Object
+    Dim lotDetails As String
+    Dim totalBaskets As Long
+    Dim wsTruckArrange As Worksheet
+    
+    Dim netDemand As Object
+    Dim netSupply As Object
+    Dim originPlantCode As String
+    Dim destinationPlantCode As String
+    
+    Dim availableStockOfDestination As Object
+    Dim availableStockOfOrigin As Object
+    
+    Dim finalOriginAvailableStock As Object
+    Dim plantCodeObject As Object
+    
+    Set plantCodeObject = GetPlantCodeObject()
+
+    
+    destinationPlantCode = plantCodeObject("destination")
+    originPlantCode = plantCodeObject("origin")
+    
+    
+    
+    ' Set the worksheet reference for "Truck_Arrange"
+    Set wsTruckArrange = ThisWorkbook.Sheets("Truck_Arrange")
+    Debug.Print "RunShippingProcess After wsTruckArrange"
+
+     
+    '1) Supply for shipment : Get Available Stock
+    Debug.Print "before start part 2 available stock"
+    'Set availableStock = GetAvailableStock() 'Done Tested
+    Debug.Print "destinationPlantCode : " & destinationPlantCode
+    Debug.Print "originPlantCode : " & originPlantCode
+    
+    Set availableStockOfOrigin = GetAvailableStockByPlantCode(originPlantCode)
+    Debug.Print "availableStockOfOrigin.Count : " & availableStockOfOrigin.Count
+
+    Set availableStockOfDestination = GetAvailableStockByPlantCode(destinationPlantCode)
+    Debug.Print "availableStockOfDestination.Count : " & availableStockOfDestination.Count
+    
+
+
+    '2) Get Net Demand of destination for Transfer
+    Set netDemand = GetNetTotalDemandOfDestination(availableStockOfDestination)
+    
+    
+
+    '3)LOT and FIFO calculation
+    Set sortedStockData = ApplyFIFO(availableStockOfOrigin)
+
+    '4) Get Net Supply from origin plant
+    Set netSupply = GetNetTotalSupplyOfOrigin(sortedStockData)
+    
+    
+    
+    
+
+    '****************Validation of shelf life for stock For others processing *****************
+    Call ValidateProductLifeForSortedStockData(sortedStockData, True)
+    '*************** END Validation of shelf life for stock ***********************************
+
+
+
+    Debug.Print "netDemand.count :" & netDemand.Count
+    Set totalDemand = netDemand
+
+    Debug.Print "netSupply.Count : " & netSupply.Count
+
+    If totalDemand.Count = 0 Then
+        MsgBox "No demand for shipment found.", vbInformation, "Shipping Process"
+        Exit Sub ' Exit the process if there’s no demand
+    Else
+        Call printDemandResult(totalDemand, destinationPlantCode)
+
+    End If
+    Debug.Print "Total Demand retrieved."
+
+
+
+
+
+    '5) Truck and Basket Arrangement
+    truckCapacity = GetTruckCapacity()
+    Debug.Print "after get truck capacity"
+    Set filledTruck = CalculateBasketsForTruck(sortedStockData, truckCapacity, totalDemand, netSupply) ' Calculate how many baskets will fit into the truck
+
+
+    '6) Stamp Lot in Shipping Documents
+    Call FinalizeLotStamping(wsTruckArrange, filledTruck)
+    Debug.Print "*************Completed Run Shipping Process *************"
+
+End Sub
+
+
