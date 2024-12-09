@@ -1,0 +1,22 @@
+' Inside clsStockData class module
+
+Public material As String
+Public materialDesc As String
+Public plantCode As String
+Public targetDate As Variant
+Public stockPack As Double
+Public remainingStock As Double
+'Private pBasketSize As Double ' Private variable for basket size
+Public pBasketSize As Double ' Private variable for basket size
+Public materialChannel As String
+
+' Property for Basket Size
+Public Property Get basketSize() As Double
+    basketSize = pBasketSize
+End Property
+
+Public Property Let basketSize(Value As Double)
+    pBasketSize = Value
+End Property
+
+
